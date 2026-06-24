@@ -1,0 +1,75 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="tests">
+      <UniqueIdentifier>{c8969352-84c0-446d-8fd3-43b399fbf538}</UniqueIdentifier>
+      <Extensions>test</Extensions>
+    </Filter>
+    <Filter Include="Docs">
+      <UniqueIdentifier>{1258fbbb-b131-4197-a9c9-9e805cb9ee94}</UniqueIdentifier>
+      <Extensions>html</Extensions>
+    </Filter>
+    <Filter Include="Headers">
+      <UniqueIdentifier>{1fd8c7e5-22b2-4fc5-a39b-2df1fcee48db}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="tests\all.tcl">
+      <Filter>tests</Filter>
+    </None>
+    <None Include="tests\socket2.test">
+      <Filter>tests</Filter>
+    </None>
+    <None Include="tests\test_client.tcl">
+      <Filter>tests</Filter>
+    </None>
+    <None Include="tests\test_server.tcl">
+      <Filter>tests</Filter>
+    </None>
+    <None Include="man.html">
+      <Filter>Docs</Filter>
+    </None>
+    <None Include="makefile.vc" />
+    <None Include="rules.vc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="iocpDecls.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="iocpIntDecls.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="iocpsock.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="iocpsockInt.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dllmain.c" />
+    <ClCompile Include="iocpsock_hilevel.c" />
+    <ClCompile Include="iocpsock_lolevel.c" />
+    <ClCompile Include="iocpsock_thrdpool.c" />
+    <ClCompile Include="iocpStubInit.c" />
+    <ClCompile Include="iocpStubLib.c" />
+    <ClCompile Include="linkedlist.c" />
+    <ClCompile Include="tclWinError.c" />
+    <ClCompile Include="ws2apltalk.c" />
+    <ClCompile Include="ws2atm.c" />
+    <ClCompile Include="ws2decnet.c" />
+    <ClCompile Include="ws2ipx.c" />
+    <ClCompile Include="ws2irda.c" />
+    <ClCompile Include="ws2isotp4.c" />
+    <ClCompile Include="ws2netbios.c" />
+    <ClCompile Include="ws2tcp.c" />
+    <ClCompile Include="ws2udp.c" />
+    <ClCompile Include="ws2vines.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="iocpsock.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="iocpsock.decls" />
+  </ItemGroup>
+</Project>
