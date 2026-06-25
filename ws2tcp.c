@@ -714,8 +714,6 @@ Tcl_Obj *
 DecodeQosFlowspec(QOS *qosPtr)
 {
     Tcl_Obj *dictPtr = Tcl_NewDictObj();
-    Tcl_Obj *sendKey, *sendValue;
-    Tcl_Obj *recvKey, *recvValue;
 
     // Helper macro to clean up dictionary building
     #define SET_DICT_INT(dict, direction, field, value) \

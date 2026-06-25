@@ -163,7 +163,7 @@ Iocp_IrdaIasQuery (Tcl_Interp *interp, Tcl_Obj *deviceId,
     /*
      * Decode irdaDeviceId
      */
-    code = sscanf(Tcl_GetString(deviceId), "%02x-%02x-%02x-%02x",
+    code = sscanf(Tcl_GetString(deviceId), "%02hhx-%02hhx-%02hhx-%02hhx",
 	&iasQuery.irdaDeviceID[0], &iasQuery.irdaDeviceID[1],
 	&iasQuery.irdaDeviceID[2], &iasQuery.irdaDeviceID[3]);
     if (code != 4) {
