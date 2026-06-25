@@ -95,7 +95,7 @@ Iocp_OpenUdpSocket (
 }
 
 
-#if 0
+#if 1
 static SocketInfo *
 CreateUdpSocket (
     Tcl_Interp *interp,
