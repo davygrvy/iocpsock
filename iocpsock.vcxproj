@@ -179,6 +179,9 @@
     </ClCompile>
     <ClCompile Include="linkedlist.c" />
     <ClCompile Include="tclWinError.c" />
+    <ClCompile Include="tclWinIocp.c">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="ws2apltalk.c">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
     </ClCompile>

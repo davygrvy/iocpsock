@@ -9,9 +9,6 @@
 #define WIN32
 #endif
 
-/* ask for typedefs also */
-#define INCL_WINSOCK_API_TYPEDEFS   1
-
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <wspiapi.h>
@@ -34,7 +31,7 @@
 #define   snprintf	_snprintf
 #endif
 
-/* 1) Required for the POSIX error constants (that should be public!) */
+/* 1) Required for the POSIX error constants (that should be public, IMO) */
 /* 2) Required for the definition of the TCL_TSD_INIT macro */
 #define __WIN32__
 #include "tclInt.h"
@@ -68,7 +65,7 @@ extern LONG StatFailedReplacementAcceptExCalls;
 struct _ListNode;
 struct _List;
 typedef struct _ListNode {
-    struct _ListNode *next;	/* node in back */
+    struct _ListNode *next;	/* node in front */
     struct _ListNode *prev;	/* node in back */
     struct _List *ll;		/* parent linked-list */
     LPVOID lpItem;		/* storage item */

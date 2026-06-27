@@ -95,7 +95,7 @@ Iocp_OpenUdpSocket (
 }
 
 
-#if 1
+#if 0
 static SocketInfo *
 CreateUdpSocket (
     Tcl_Interp *interp,
@@ -124,7 +124,7 @@ CreateUdpSocket (
 	goto error;
     }
 
-    sock = winSock.WSASocketA(udp4ProtoData.af, udp4ProtoData.type,
+    sock = WSASocket(udp4ProtoData.af, udp4ProtoData.type,
 	    udp4ProtoData.protocol, NULL, 0, WSA_FLAG_OVERLAPPED);
     if (sock == INVALID_SOCKET) {
 	goto error;
@@ -148,7 +148,7 @@ CreateUdpSocket (
      * port.  Implies an automatic set to non-blocking. */
     if (CreateIoCompletionPort((HANDLE)sock, IocpSubSystem.port,
 	    (ULONG_PTR)infoPtr, 0) == NULL) {
-	winSock.WSASetLastError(GetLastError());
+	WSASetLastError(GetLastError());
 	goto error;
     }
 
@@ -163,7 +163,7 @@ CreateUdpSocket (
 	 * place to look for bugs.
 	 */
     
-	if (winSock.bind(sock, hostaddr->ai_addr,
+	if (bind(sock, hostaddr->ai_addr,
 		hostaddr->ai_addrlen) == SOCKET_ERROR) {
             goto error;
         }
@@ -185,7 +185,7 @@ CreateUdpSocket (
          */
 
 	if (myaddr != NULL || myport != 0) { 
-	    if (winSock.bind(sock, mysockaddr->ai_addr,
+	    if (bind(sock, mysockaddr->ai_addr,
 		    mysockaddr->ai_addrlen) == SOCKET_ERROR) {
 		goto error;
 	    }
@@ -204,7 +204,7 @@ CreateUdpSocket (
 		    hostaddr->ai_addrlen, bufPtr->buf, bufPtr->buflen,
 		    &bytes, &bufPtr->ol);
 
-	    WSAerr = winSock.WSAGetLastError();
+	    WSAerr = WSAGetLastError();
 	    if (code == FALSE) {
 		if (WSAerr != WSA_IO_PENDING) {
 		    FreeBufferObj(bufPtr);
@@ -213,7 +213,7 @@ CreateUdpSocket (
 		}
 	    }
 	} else {
-	    code = winSock.connect(sock, hostaddr->ai_addr, hostaddr->ai_addrlen);
+	    code = connect(sock, hostaddr->ai_addr, hostaddr->ai_addrlen);
 	    if (code == SOCKET_ERROR) {
 		FreeSocketAddress(hostaddr);
 		goto error;
@@ -225,7 +225,7 @@ CreateUdpSocket (
     return infoPtr;
 
 error:
-    IocpWinConvertWSAError(winSock.WSAGetLastError());
+    IocpWinConvertWSAError(WSAGetLastError());
     if (interp != NULL) {
 	Tcl_AppendResult(interp, "couldn't open socket: ",
 		Tcl_PosixError(interp), NULL);
