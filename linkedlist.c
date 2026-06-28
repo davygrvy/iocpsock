@@ -67,14 +67,8 @@ IocpLLCreate (void)
 	IocpFree(ll);
 	return NULL;
     }
-    ll->haveData = CreateEvent(NULL, TRUE, FALSE, NULL);  /* manual reset */
-    if (ll->haveData == INVALID_HANDLE_VALUE) {
-	DeleteCriticalSection(&ll->lock);
-	IocpFree(ll);
-	return NULL;
-    }
-    ll->back = ll->front = 0L;
-    ll->lCount = 0;
+    ll->back = ll->front = NULL;
+    InterlockedExchange(&ll->lCount, 0);
     return ll;
 }
 
@@ -102,7 +96,6 @@ IocpLLDestroy (
 	return FALSE;
     }
     DeleteCriticalSection(&ll->lock);
-    CloseHandle(ll->haveData);
     return IocpFree(ll);
 }
 
@@ -158,7 +151,6 @@ IocpLLPushBack(
     }
     ll->lCount++;
     pnode->ll = ll;
-    SetEvent(ll->haveData);
     if (mask_n(dwState, IOCP_LL_NOLOCK)) {
 	LeaveCriticalSection(&ll->lock);
     }
@@ -215,9 +207,8 @@ IocpLLPushFront(
 	ll->front = pnode;
 	ll->front->next = tmp;
     }
-    ll->lCount++;
+    InterlockedIncrement(&ll->lCount);
     pnode->ll = ll;
-    SetEvent(ll->haveData);
     if (mask_n(dwState, IOCP_LL_NOLOCK)) {
 	LeaveCriticalSection(&ll->lock);
     }
@@ -277,7 +268,7 @@ IocpLLPopAll(
 	    tmp1->next = NULL; 
             tmp1->prev = NULL;
 	}
-        ll->lCount--;
+        InterlockedDecrement(&ll->lCount);
 	tmp1 = tmp2;
     }
 
@@ -391,8 +382,7 @@ IocpLLPop(
 	node->next = NULL; 
         node->prev = NULL;
     }
-    ll->lCount--;
-    if (ll->lCount <= 0) {
+    if (InterlockedDecrement(&ll->lCount) <= 0) {
 	ll->front = NULL;
 	ll->back = NULL;
     }
@@ -454,24 +444,6 @@ IocpLLPopBack(
 	return NULL;
     }
     EnterCriticalSection(&ll->lock);
-    if (!ll->lCount) {
-	if (timeout) {
-	    DWORD dwWait;
-	    ResetEvent(ll->haveData);
-	    LeaveCriticalSection(&ll->lock);
-	    dwWait = WaitForSingleObject(ll->haveData, timeout);
-	    if (dwWait == WAIT_OBJECT_0) {
-		/* wait succedded, fall through and remove one. */
-		EnterCriticalSection(&ll->lock);
-	    } else {
-		/* wait failed */
-		return NULL;
-	    }
-	} else {
-	    LeaveCriticalSection(&ll->lock);
-	    return NULL;
-	}
-    }
     tmp = ll->back;
     data = tmp->lpItem;
     IocpLLPop(tmp, IOCP_LL_NOLOCK | dwState);
@@ -508,24 +480,6 @@ IocpLLPopFront(
 	return NULL;
     }
     EnterCriticalSection(&ll->lock);
-    if (!ll->lCount) {
-	if (timeout) {
-	    DWORD dwWait;
-	    ResetEvent(ll->haveData);
-	    LeaveCriticalSection(&ll->lock);
-	    dwWait = WaitForSingleObject(ll->haveData, timeout);
-	    if (dwWait == WAIT_OBJECT_0) {
-		/* wait succedded, fall through and remove one. */
-		EnterCriticalSection(&ll->lock);
-	    } else {
-		/* wait failed */
-		return NULL;
-	    }
-	} else {
-	    LeaveCriticalSection(&ll->lock);
-	    return NULL;
-	}
-    }
     tmp = ll->front;
     data = tmp->lpItem;
     IocpLLPop(tmp, IOCP_LL_NOLOCK | dwState);
@@ -556,9 +510,9 @@ IocpLLIsNotEmpty (LPLLIST ll)
     if (!ll) {
 	return FALSE;
     }
-    EnterCriticalSection(&ll->lock);
+    //EnterCriticalSection(&ll->lock);
     b = (ll->lCount != 0);
-    LeaveCriticalSection(&ll->lock);
+    //LeaveCriticalSection(&ll->lock);
     return b;
 }
 
@@ -585,8 +539,8 @@ IocpLLGetCount (LPLLIST ll)
     if (!ll) {
 	return 0;
     }
-    EnterCriticalSection(&ll->lock);
+    //EnterCriticalSection(&ll->lock);
     c = ll->lCount;
-    LeaveCriticalSection(&ll->lock);
+    //LeaveCriticalSection(&ll->lock);
     return c;
 }

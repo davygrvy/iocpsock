@@ -65,7 +65,7 @@ extern LONG StatFailedReplacementAcceptExCalls;
 struct _ListNode;
 struct _List;
 typedef struct _ListNode {
-    struct _ListNode *next;	/* node in front */
+    struct _ListNode * volatile next;	/* node in front */
     struct _ListNode *prev;	/* node in back */
     struct _List *ll;		/* parent linked-list */
     LPVOID lpItem;		/* storage item */
@@ -75,10 +75,15 @@ typedef struct _ListNode {
 typedef struct _List {
     struct _ListNode *front;	/* head of list */
     struct _ListNode *back;	/* tail of list */
-    LONG lCount;		/* nodes contained */
+    volatile LONG lCount;	/* nodes contained */
     CRITICAL_SECTION lock;	/* accessor lock */
-    HANDLE haveData;		/* event when data is added to an empty list */
 } LLIST, *LPLLIST;
+
+/*
+ * Thread safe linked-list management state bitmasks.
+ */
+#define IOCP_LL_NOLOCK		(1<<0)
+#define IOCP_LL_NODESTROY	(1<<1)
 
 
 struct SocketInfo;
@@ -282,18 +287,6 @@ extern __inline LPVOID  IocpNPPReAlloc (LPVOID block, SIZE_T size);
 extern __inline BOOL	IocpNPPFree (LPVOID block);
 
 
-/* 
- * Thread safe linked-list management state bitmasks.
- */
-#define IOCP_LL_NOLOCK		(1<<0)
-#define IOCP_LL_NODESTROY	(1<<1)
-
-
-/*
- * ----------------------------------------------------------------------
- * Some stuff that needs to be switches or fconfigures, but aren't yet.
- * ----------------------------------------------------------------------
- */
 
 /*
  * Default number of overlapped AcceptEx calls to place on a new
