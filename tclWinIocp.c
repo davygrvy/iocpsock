@@ -1,9 +1,16 @@
 /* ----------------------------------------------------------------------
  *
- * tclWinIOCP.c --
+ * tclWinIocp.c --
  *
- *	Routines for managing and running completion ports for I/O
- *	including the lock-free atomic queues.
+ *	Shared routines for managing and running a completion port for
+ *	overlapped I/O on windows common to the native channel drivers
+ *	both included in the core and available to extensions.
+ *
+ *	This file includes the one single global thread to service the
+ *	completeion port for the internal (and external) native channel
+ *	drivers, the memory allocator for the special non-paged pool,
+ *	and the optimized lock-free single-producer single-consumer
+ *	atomic FIFO queue routines.
  *
  * ----------------------------------------------------------------------
  * RCS: @(#) $Id: $
@@ -16,19 +23,95 @@ struct iocpheader {
 
 };
 
-/* locals */
-HANDLE cport;
-HANDLE cpthread;
+/* to be shared public protos */
+extern DWORD TclWinIocpAssocHandle(HANDLE hndl, mystruct ocp);
 
-void InitializeIOCPSubSystem()
+/* shared private protos */
+extern DWORD InitializeIocpSubSystem();
+
+/* local protos */
+static DWORD WINAPI CompletionThreadProc(LPVOID lpParam);
+Tcl_ExitProc IocpExitHandler;
+
+/* file-scope globals */
+static LONG initialized = 0;
+static HANDLE cport;
+static HANDLE cpthread;
+static HANDLE NPPheap;
+
+DWORD
+InitializeIocpSubSystem()
 {
-    // start thread
-    // validate thread.
-    // set exit handler
+    DWORD error = NO_ERROR;
+    SYSTEM_INFO si;
+
+    /* global/once init */
+    if (InterlockedExchange(&initialized, 1) == 0) {
+
+	/* Create the completion port. */
+	cport = CreateIoCompletionPort(
+		INVALID_HANDLE_VALUE, NULL, (ULONG_PTR)NULL, 0);
+	if (cport == NULL) {
+	    error = GetLastError();
+	    goto error;
+	}
+
+	GetNativeSystemInfo(&si);
+#define IOCP_HEAP_START_SIZE	(si.dwPageSize*64)  /* about 256k */
+
+	/* Create the special private memory heap. */
+	NPPheap = HeapCreate(0, IOCP_HEAP_START_SIZE, 0);
+	if (NPPheap == NULL) {
+	    error = GetLastError();
+	    CloseHandle(cport);
+	    goto error;
+	}
+
+	cpthread = CreateThread(NULL, 0, CompletionThreadProc, NULL,
+		0, NULL);
+	if (cpthread == NULL) {
+	    error = GetLastError();
+	    HeapDestroy(NPPheap);
+	    CloseHandle(cport);
+	    goto error;
+	}
+
+	Tcl_CreateExitHandler(IocpExitHandler, NULL);
+    }
+	
+    return NO_ERROR;
+
+error:
+    InterlockedExchange(&initialized, 0);
+    return error;
+}
+
+void
+IocpExitHandler(ClientData clientData)
+{
+    DWORD wait;
+
+    if (InterlockedExchange(&initialized, 0) == 1) {
+	/* Cause the completion thread to exit. */
+	PostQueuedCompletionStatus(cport, 0, 0, 0);
+
+	/* Wait for our completion thread to exit. */
+	wait = WaitForSingleObject(cpthread, 400);
+	if (wait == WAIT_TIMEOUT) {
+	    TerminateThread(cpthread, 0x666);
+	}
+	CloseHandle(cpthread);
+
+	/* Close the completion port object. */
+	CloseHandle(cport);
+
+	/* Tear down the private memory heap. */
+	HeapDestroy(NPPheap);
+    }
 }
 
 extern HANDLE
-TclWinIOCPGetPort()
+TclWinIocpGetPort()
 {
     return cport;
 }
@@ -57,41 +140,31 @@ TclWinIocpAssocHandle(HANDLE hndl, mystruct ocp)
  * 
  * Side effects:
  * 
- *	Without direct interaction from Tcl, incoming I/O with be managed
- *	in their queue and replaced for the next operation.  Tcl will
+ *	Without direct interaction from Tcl, incoming I/O will be moved
+ *	to their FIFO queues and replaced for the next operation.  Tcl will
  *	service them when the event loop is ready to.
  * 
  * ----------------------------------------------------------------------
  */
 
-static DWORD WINAPI
+DWORD WINAPI
 CompletionThreadProc(LPVOID lpParam)
 {
-    CompletionPortInfo* cpinfo = (CompletionPortInfo*)lpParam;
-    SocketInfo* infoPtr;
-    BufferInfo* bufPtr;
+    TclWinIocpInfo* infoPtr;
+    TclWinIocpBufferInfo* bufPtr;
     OVERLAPPED* ol;
-    DWORD bytes, flags, WSAerr, error = NO_ERROR;
+    DWORD bytes, err, error = NO_ERROR;
     BOOL ok;
 
-#ifdef _DEBUG
-#else
-    __try {
-#endif
     again:
-	WSAerr = NO_ERROR;
-	flags = 0;
+	err = NO_ERROR;
 
-	ok = GetQueuedCompletionStatus(cpinfo->port, &bytes,
+	ok = GetQueuedCompletionStatus(cport, &bytes,
 	    (PULONG_PTR)&infoPtr, &ol, INFINITE);
 
 	if (ok && !infoPtr) {
 	    /* A NULL key indicates closure time for this thread. */
-#ifdef _DEBUG
 	    return error;
-#else
-	    __leave;
-#endif
 	}
 
 	/*
@@ -107,29 +180,19 @@ CompletionThreadProc(LPVOID lpParam)
 	if (!ok) {
 	    /*
 	     * If GetQueuedCompletionStatus() returned a failure on
-	     * the operation, call WSAGetOverlappedResult() to
-	     * translate the error into a Winsock error code.
+	     * the operation, call GetOverlappedResult() to
+	     * retreive the error code.
 	     */
 
-	    ok = WSAGetOverlappedResult(infoPtr->socket,
-		ol, &bytes, FALSE, &flags);
+	    ok = GetOverlappedResult(infoPtr->handle, ol,
+		    &bytes, FALSE);
 
 	    if (!ok) {
-		WSAerr = WSAGetLastError();
+		err = GetLastError();
 	    }
 	}
 
 	/* Go handle the IO operation. */
-	HandleIo(infoPtr, bufPtr, cpinfo->port, bytes, WSAerr, flags);
+	infoPtr->serviceProc(infoPtr, bufPtr, cport, bytes, err);
 	goto again;
-#ifdef _DEBUG
-#else
-    }
-    __except (error = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
-	Tcl_Panic("Big ERROR!  IOCP Completion thread died with exception"
-	    " code: %#x\n", error);
-    }
-
-    return error;
-#endif
 }
