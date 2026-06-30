@@ -1440,7 +1440,6 @@ IocpGetHandleProc (
     return TCL_OK;
 }
 
-#ifdef TCL_CHANNEL_VERSION_4
 static void
 IocpThreadActionProc (ClientData instanceData, int action)
 {
@@ -1463,7 +1462,6 @@ IocpThreadActionProc (ClientData instanceData, int action)
 	LeaveCriticalSection(&infoPtr->tsdLock);
     }
 }
-#endif
 
 /* =================================================================== */
 /* ============== Lo-level buffer and state manipulation ============= */
@@ -2097,7 +2095,7 @@ IocpSetRecvMode(
 	}
 	break;
     case IOCP_RECVMODE_FLOW_CTRL:
-	recvBufSize = 0; break;
+	recvBufSize = 24; break;
     case IOCP_RECVMODE_BURST_DETECT:
 	recvBufSize = IOCP_RECV_BUFSIZE; break;
     }

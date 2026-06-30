@@ -24,21 +24,22 @@ struct iocpheader {
 };
 
 /* to be shared public protos */
-extern DWORD		TclWinIocpAssocHandle(HANDLE hndl, iocpheader *ocp);
-extern __inline LPVOID	TclWinIocpNPPAlloc(SIZE_T size);
-extern __inline LPVOID	TclWinIocpNPPReAlloc(LPVOID block, SIZE_T size);
-extern __inline BOOL	TclWinIocpNPPFree(LPVOID block);
+extern DWORD		Tcl_WinIocpAssocHandle(HANDLE hndl, iocpheader* ocp);
+extern DWORD		Tcl_WinIocpPostToCP(HANDLE hndl, iocpheader* ocp);
+extern __inline LPVOID	Tcl_WinIocpNPPAlloc(SIZE_T size);
+extern __inline LPVOID	Tcl_WinIocpNPPReAlloc(LPVOID block, SIZE_T size);
+extern __inline BOOL	Tcl_WinIocpNPPFree(LPVOID block);
 
 /* https://learn.microsoft.com/en-us/windows/win32/Sync/interlocked-singly-linked-lists */
-extern PSLIST_HEADER	TclWinIocpQCreate();
-extern void		TclWinIocpQDestroy(PSLIST_HEADER pListHead);
-extern PSLIST_ENTRY	TclWinIocpQNodeCreate();
-extern void		TclWinIocpQNodeDestroy(PSLIST_ENTRY pListNode);
-extern LPVOID		TclWinIocpQPoPFront(PSLIST_HEADER pListHead);
-extern void		TclWinIocpQPushBack(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode);
-extern void		TclWinIocpQPushFront(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode);
-extern void		TclWinIocpQPopAllCompare(PSLIST_HEADER pListHead, LPVOID pItem);
-extern void		TclWinIocpQPop(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode);
+extern PSLIST_HEADER	Tcl_WinIocpQCreate();
+extern void		Tcl_WinIocpQDestroy(PSLIST_HEADER pListHead);
+extern PSLIST_ENTRY	Tcl_WinIocpQNodeCreate();
+extern void		Tcl_WinIocpQNodeDestroy(PSLIST_ENTRY pListNode);
+extern LPVOID		Tcl_WinIocpQPoPFront(PSLIST_HEADER pListHead);
+extern void		Tcl_WinIocpQPushBack(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode);
+extern void		Tcl_WinIocpQPushFront(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode);
+extern void		Tcl_WinIocpQPopAllCompare(PSLIST_HEADER pListHead, LPVOID pItem);
+extern void		Tcl_WinIocpQPop(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode);
 
 /* shared private protos */
 extern DWORD InitializeIocpSubSystem();
@@ -207,10 +208,16 @@ CompletionThreadProc(LPVOID lpParam)
 }
 
 DWORD
-TclWinIocpAssocHandle(HANDLE hndl, iocpheader *ocp)
+Tcl_WinIocpAssocHandle(HANDLE hndl, iocpheader *ocp)
 {
     CreateIoCompletionPort(hndl, cport, (ULONG_PTR)ocp, 0);
     return NO_ERROR;
+}
+
+DWORD
+Tcl_WinIocpPostToCP(iocpheader* ocp)
+{
+    PostQueuedCompletionStatus(cport, 0, (ULONG_PTR)ocp, );
 }
 
 
@@ -218,7 +225,7 @@ TclWinIocpAssocHandle(HANDLE hndl, iocpheader *ocp)
 /* special pool */
 
 __inline LPVOID
-TclWinIocpNPPAlloc(SIZE_T size)
+Tcl_WinIocpNPPAlloc(SIZE_T size)
 {
     LPVOID p;
     p = HeapAlloc(NPPheap, HEAP_ZERO_MEMORY, size);
@@ -227,7 +234,7 @@ TclWinIocpNPPAlloc(SIZE_T size)
 }
 
 __inline LPVOID
-TclWinIocpNPPReAlloc(LPVOID block, SIZE_T size)
+Tcl_WinIocpNPPReAlloc(LPVOID block, SIZE_T size)
 {
     LPVOID p;
     SIZE_T oldSize;
@@ -238,7 +245,7 @@ TclWinIocpNPPReAlloc(LPVOID block, SIZE_T size)
 }
 
 __inline BOOL
-TclWinIocpNPPFree(LPVOID block)
+Tcl_WinIocpNPPFree(LPVOID block)
 {
     BOOL code;
     SIZE_T oldSize;
@@ -251,7 +258,7 @@ TclWinIocpNPPFree(LPVOID block)
 /* lock-free queue */
 
 PSLIST_HEADER
-TclWinIocpQCreate()
+Tcl_WinIocpQCreate()
 {
     PSLIST_HEADER pListHead;
 
@@ -263,13 +270,13 @@ TclWinIocpQCreate()
 }
 
 void
-TclWinIocpQDestroy(PSLIST_HEADER pListHead)
+Tcl_WinIocpQDestroy(PSLIST_HEADER pListHead)
 {
     _aligned_free(pListHead);
 }
 
 PSLIST_ENTRY
-TclWinIocpQNodeCreate()
+Tcl_WinIocpQNodeCreate()
 {
     PSLIST_ENTRY pListNode;
 
@@ -279,37 +286,38 @@ TclWinIocpQNodeCreate()
 }
 
 void
-TclWinIocpQNodeDestroy(PSLIST_ENTRY pListNode)
+Tcl_WinIocpQNodeDestroy(PSLIST_ENTRY pListNode)
 {
     _aligned_free(pListNode);
 }
 
 LPVOID
-TclWinIocpQPoPFront(PSLIST_HEADER pListHead)
+Tcl_WinIocpQPoPFront(PSLIST_HEADER pListHead)
 {
     return InterlockedPopEntrySList(pListHead);
 }
 
 void
-TclWinIocpQPushBack(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode)
+Tcl_WinIocpQPushBack(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode)
 {
     InterlockedPushEntrySList(pListHead, pListNode);
 }
 
 void
-TclWinIocpQPushFront(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode)
+Tcl_WinIocpQPushFront(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode)
 {
     // TODO 
 }
 
 void
-TclWinIocpQPopAllCompare(PSLIST_HEADER pListHead, LPVOID pItem)
+Tcl_WinIocpQPopAllCompare(PSLIST_HEADER pListHead, LPVOID pItem)
 {
     // TODO: unlink the first entry, walk the list pulling out all matches for item, splice fixed list at head
+    InterlockedExchangePointer();
 }
 
 void
-TclWinIocpQPop(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode)
+Tcl_WinIocpQPop(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode)
 {
     // TODO: unsplice list, traverse it until node is found unlink it, replice list
 }

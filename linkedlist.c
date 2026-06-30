@@ -11,24 +11,6 @@
 
 #include "iocpsockInt.h"
 
-/*
- * ----------------------------------------------------------------------
- * Note to self, try to upgrade all of this to the atomic functions in
- * interlockedapi.h.  The speed of our LL functions here has a measurable
- * effect on the performance of HandleIo().  All calls here to 
- * [Enter|Leave]CriticalSection() drastically effect performance. Atomic
- * is the way to go.
- * 
- * InitializeSListHead
- * InterlockedPushEntrySList
- * InterlockedPopEntrySList
- * QueryDepthSList
- * InterlockedFlushSList
- * 
- * Note: PushFront and others are missing.  Maybe addapt this with
- * _InterlockedCompareExchange128()?
- * ----------------------------------------------------------------------
- */
 
 
 /* Bitmask macros. */
@@ -146,10 +128,20 @@ IocpLLPushBack(
     } else {
 	ll->back->next = pnode;
 	tmp = ll->back;
+#if 0
+	// Exchange the back tracking pointer atomically
+	LPLLNODE oldBack = (LPLLNODE)InterlockedExchangePointer(
+	    (PVOID volatile*)&ll->back,
+	    pnode
+	);
+#else
 	ll->back = pnode;
+#endif
+
 	ll->back->prev = tmp;
     }
-    ll->lCount++;
+
+    InterlockedIncrement(&ll->lCount);
     pnode->ll = ll;
     if (mask_n(dwState, IOCP_LL_NOLOCK)) {
 	LeaveCriticalSection(&ll->lock);
