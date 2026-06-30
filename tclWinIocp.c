@@ -3,7 +3,7 @@
  * tclWinIocp.c --
  *
  *	Shared routines for managing and running a completion port for
- *	overlapped I/O on windows common to the native channel drivers
+ *	overlapped I/O on Windows common to the native channel drivers
  *	both included in the core and available to extensions.
  *
  *	This file includes the one single global thread to service the
@@ -29,7 +29,7 @@ extern DWORD TclWinIocpAssocHandle(HANDLE hndl, mystruct ocp);
 /* shared private protos */
 extern DWORD InitializeIocpSubSystem();
 
-/* local protos */
+/* file-scope protos */
 static DWORD WINAPI CompletionThreadProc(LPVOID lpParam);
 Tcl_ExitProc IocpExitHandler;
 
@@ -68,13 +68,21 @@ InitializeIocpSubSystem()
 	}
 
 	cpthread = CreateThread(NULL, 0, CompletionThreadProc, NULL,
-		0, NULL);
+		CREATE_SUSPENDED, NULL);
 	if (cpthread == NULL) {
 	    error = GetLastError();
 	    HeapDestroy(NPPheap);
 	    CloseHandle(cport);
 	    goto error;
 	}
+
+	/*
+	 * Do not elevate priority. You could try
+	 * THREAD_PRIORITY_BELOW_NORMAL for a more responsive Tk UI
+	 */
+
+	SetThreadPriority(cpthread, THREAD_PRIORITY_NORMAL);
+	ResumeThread(cpthread);
 
 	Tcl_CreateExitHandler(IocpExitHandler, NULL);
     }
@@ -153,19 +161,19 @@ CompletionThreadProc(LPVOID lpParam)
     TclWinIocpInfo* infoPtr;
     TclWinIocpBufferInfo* bufPtr;
     OVERLAPPED* ol;
-    DWORD bytes, err, error = NO_ERROR;
+    DWORD bytes, opErr, error = NO_ERROR;
     BOOL ok;
 
     again:
-	err = NO_ERROR;
+    opErr = NO_ERROR;
 
-	ok = GetQueuedCompletionStatus(cport, &bytes,
+    ok = GetQueuedCompletionStatus(cport, &bytes,
 	    (PULONG_PTR)&infoPtr, &ol, INFINITE);
 
-	if (ok && !infoPtr) {
-	    /* A NULL key indicates closure time for this thread. */
-	    return error;
-	}
+    if (ok && !infoPtr) {
+	/* A NULL key indicates closure time for this thread. */
+	return error;
+    }
 
 	/*
 	 * Use the pointer to the overlapped structure and derive from it
@@ -188,11 +196,11 @@ CompletionThreadProc(LPVOID lpParam)
 		    &bytes, FALSE);
 
 	    if (!ok) {
-		err = GetLastError();
+		opErr = GetLastError();
 	    }
 	}
 
 	/* Go handle the IO operation. */
-	infoPtr->serviceProc(infoPtr, bufPtr, cport, bytes, err);
+	infoPtr->serviceProc(infoPtr, bufPtr, cport, bytes, opErr);
 	goto again;
 }
