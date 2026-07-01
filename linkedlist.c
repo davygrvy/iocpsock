@@ -11,77 +11,6 @@
 
 #include "iocpsockInt.h"
 
-/*
- * compare and swap functions
- */
-
-#if !defined(_MSC_VER)
-static inline char CAS (volatile void * addr, volatile void * value, void * newvalue) 
-{
-    register char ret;
-    __asm__ __volatile__ (
-	"# CAS \n\t"
-	"lock ; cmpxchg %2, (%1) \n\t"
-	"sete %0                 \n\t"
-	:"=a" (ret)
-	:"c" (addr), "d" (newvalue), "a" (value)
-    );
-    return ret;
-}
-
-static inline char CAS2 (volatile void * addr, volatile void * v1, volatile long v2, void * n1, long n2) 
-{
-    register char ret;
-    __asm__ __volatile__ (
-	"# CAS2 \n\t"
-	"lock ;  cmpxchg8b (%1) \n\t"
-	"sete %0                \n\t"
-	:"=a" (ret)
-	:"D" (addr), "d" (v2), "a" (v1), "b" (n1), "c" (n2)
-    );
-    return ret;
-}
-#else
-static __inline char CAS (volatile void * addr, volatile void * value, void * newvalue) 
-{
-    register char c;
-    __asm {
-	push	ebx
-	push	esi
-	mov	esi, addr
-	mov	eax, value
-	mov	ebx, newvalue
-	lock	cmpxchg dword ptr [esi], ebx
-	sete	c
-	pop	esi
-	pop	ebx
-    }
-    return c;
-}
-
-static __inline char CAS2 (volatile void * addr, volatile void * v1, volatile long v2, void * n1, long n2) 
-{
-    register char c;
-    __asm {
-	push	ebx
-	push	ecx
-	push	edx
-	push	esi
-	mov	esi, addr
-	mov	eax, v1
-	mov	ebx, n1
-	mov	ecx, n2
-	mov	edx, v2
-	lock    cmpxchg8b qword ptr [esi]
-	sete	c
-	pop	esi
-	pop	edx
-	pop	ecx
-	pop	ebx
-    }
-    return c;
-}
-#endif
 
 
 /* Bitmask macros. */
@@ -120,14 +49,8 @@ IocpLLCreate (void)
 	IocpFree(ll);
 	return NULL;
     }
-    ll->haveData = CreateEvent(NULL, TRUE, FALSE, NULL);  /* manual reset */
-    if (ll->haveData == INVALID_HANDLE_VALUE) {
-	DeleteCriticalSection(&ll->lock);
-	IocpFree(ll);
-	return NULL;
-    }
-    ll->back = ll->front = 0L;
-    ll->lCount = 0;
+    ll->back = ll->front = NULL;
+    InterlockedExchange(&ll->lCount, 0);
     return ll;
 }
 
@@ -155,7 +78,6 @@ IocpLLDestroy (
 	return FALSE;
     }
     DeleteCriticalSection(&ll->lock);
-    CloseHandle(ll->haveData);
     return IocpFree(ll);
 }
 
@@ -206,12 +128,21 @@ IocpLLPushBack(
     } else {
 	ll->back->next = pnode;
 	tmp = ll->back;
+#if 0
+	// Exchange the back tracking pointer atomically
+	LPLLNODE oldBack = (LPLLNODE)InterlockedExchangePointer(
+	    (PVOID volatile*)&ll->back,
+	    pnode
+	);
+#else
 	ll->back = pnode;
+#endif
+
 	ll->back->prev = tmp;
     }
-    ll->lCount++;
+
+    InterlockedIncrement(&ll->lCount);
     pnode->ll = ll;
-    SetEvent(ll->haveData);
     if (mask_n(dwState, IOCP_LL_NOLOCK)) {
 	LeaveCriticalSection(&ll->lock);
     }
@@ -268,9 +199,8 @@ IocpLLPushFront(
 	ll->front = pnode;
 	ll->front->next = tmp;
     }
-    ll->lCount++;
+    InterlockedIncrement(&ll->lCount);
     pnode->ll = ll;
-    SetEvent(ll->haveData);
     if (mask_n(dwState, IOCP_LL_NOLOCK)) {
 	LeaveCriticalSection(&ll->lock);
     }
@@ -330,7 +260,7 @@ IocpLLPopAll(
 	    tmp1->next = NULL; 
             tmp1->prev = NULL;
 	}
-        ll->lCount--;
+        InterlockedDecrement(&ll->lCount);
 	tmp1 = tmp2;
     }
 
@@ -444,8 +374,7 @@ IocpLLPop(
 	node->next = NULL; 
         node->prev = NULL;
     }
-    ll->lCount--;
-    if (ll->lCount <= 0) {
+    if (InterlockedDecrement(&ll->lCount) <= 0) {
 	ll->front = NULL;
 	ll->back = NULL;
     }
@@ -507,24 +436,6 @@ IocpLLPopBack(
 	return NULL;
     }
     EnterCriticalSection(&ll->lock);
-    if (!ll->lCount) {
-	if (timeout) {
-	    DWORD dwWait;
-	    ResetEvent(ll->haveData);
-	    LeaveCriticalSection(&ll->lock);
-	    dwWait = WaitForSingleObject(ll->haveData, timeout);
-	    if (dwWait == WAIT_OBJECT_0) {
-		/* wait succedded, fall through and remove one. */
-		EnterCriticalSection(&ll->lock);
-	    } else {
-		/* wait failed */
-		return NULL;
-	    }
-	} else {
-	    LeaveCriticalSection(&ll->lock);
-	    return NULL;
-	}
-    }
     tmp = ll->back;
     data = tmp->lpItem;
     IocpLLPop(tmp, IOCP_LL_NOLOCK | dwState);
@@ -561,24 +472,6 @@ IocpLLPopFront(
 	return NULL;
     }
     EnterCriticalSection(&ll->lock);
-    if (!ll->lCount) {
-	if (timeout) {
-	    DWORD dwWait;
-	    ResetEvent(ll->haveData);
-	    LeaveCriticalSection(&ll->lock);
-	    dwWait = WaitForSingleObject(ll->haveData, timeout);
-	    if (dwWait == WAIT_OBJECT_0) {
-		/* wait succedded, fall through and remove one. */
-		EnterCriticalSection(&ll->lock);
-	    } else {
-		/* wait failed */
-		return NULL;
-	    }
-	} else {
-	    LeaveCriticalSection(&ll->lock);
-	    return NULL;
-	}
-    }
     tmp = ll->front;
     data = tmp->lpItem;
     IocpLLPop(tmp, IOCP_LL_NOLOCK | dwState);
@@ -609,9 +502,9 @@ IocpLLIsNotEmpty (LPLLIST ll)
     if (!ll) {
 	return FALSE;
     }
-    EnterCriticalSection(&ll->lock);
+    //EnterCriticalSection(&ll->lock);
     b = (ll->lCount != 0);
-    LeaveCriticalSection(&ll->lock);
+    //LeaveCriticalSection(&ll->lock);
     return b;
 }
 
@@ -638,8 +531,8 @@ IocpLLGetCount (LPLLIST ll)
     if (!ll) {
 	return 0;
     }
-    EnterCriticalSection(&ll->lock);
+    //EnterCriticalSection(&ll->lock);
     c = ll->lCount;
-    LeaveCriticalSection(&ll->lock);
+    //LeaveCriticalSection(&ll->lock);
     return c;
 }

@@ -53,7 +53,7 @@ static Tcl_EventProc		IocpEventProc;
 static Tcl_EventDeleteProc	IocpRemovePendingEvents;
 static Tcl_EventDeleteProc	IocpRemoveAllPendingEvents;
 
-static Tcl_DriverCloseProc	IocpCloseProc;
+static Tcl_DriverClose2Proc	IocpClose2Proc;
 static Tcl_DriverInputProc	IocpInputProc;
 static Tcl_DriverOutputProc	IocpOutputProc;
 static Tcl_DriverSetOptionProc	IocpSetOptionProc;
@@ -61,13 +61,8 @@ static Tcl_DriverGetOptionProc	IocpGetOptionProc;
 static Tcl_DriverWatchProc	IocpWatchProc;
 static Tcl_DriverGetHandleProc	IocpGetHandleProc;
 static Tcl_DriverBlockModeProc	IocpBlockProc;
-
-#ifdef TCL_CHANNEL_VERSION_4
 static Tcl_DriverThreadActionProc IocpThreadActionProc;
-#endif
 
-static Tcl_ChannelTypeVersion   IocpGetTclMaxChannelVer (
-				    Tcl_ChannelTypeVersion maxAllowed);
 static void			IocpZapTclNotifier (SocketInfo *infoPtr);
 static void			IocpAlertToTclNewAccept (SocketInfo *infoPtr,
 				    SocketInfo *newClient);
@@ -114,12 +109,8 @@ static BOOL PASCAL	OurDisconnectEx(SOCKET hSocket,
 
 Tcl_ChannelType IocpChannelType = {
     "iocp",		    /* Type name. */
-#ifdef TCL_CHANNEL_VERSION_4
-    TCL_CHANNEL_VERSION_4,  /* TIP #218. */
-#else
-    TCL_CHANNEL_VERSION_2,  /* Old way. */
-#endif
-    IocpCloseProc,	    /* Close proc. */
+    TCL_CHANNEL_VERSION_5,  
+    NULL,		    /* Close proc. */
     IocpInputProc,	    /* Input proc. */
     IocpOutputProc,	    /* Output proc. */
     NULL,		    /* Seek proc. */
@@ -127,14 +118,13 @@ Tcl_ChannelType IocpChannelType = {
     IocpGetOptionProc,	    /* Get option proc. */
     IocpWatchProc,	    /* Set up notifier to watch this channel. */
     IocpGetHandleProc,	    /* Get an OS handle from channel. */
-    NULL,		    /* close2proc. */
+    IocpClose2Proc,	    /* Close2 proc. */
     IocpBlockProc,	    /* Set socket into (non-)blocking mode. */
     NULL,		    /* flush proc. */
     NULL,		    /* handler proc. */
     NULL,		    /* wide seek */
-#ifdef TCL_CHANNEL_VERSION_4
     IocpThreadActionProc,   /* TIP #218. */
-#endif
+    NULL,		    /* truncate proc. */
 };
 
 
@@ -156,7 +146,6 @@ ThreadSpecificData *
 InitSockets(void)
 {
     WSADATA wsaData;
-    OSVERSIONINFO os;
     ThreadSpecificData *tsdPtr = TCL_TSD_INIT(&dataKey);
 
     /* global/once init */
@@ -193,35 +182,7 @@ InitSockets(void)
 
 #undef WSA_VERSION_REQUESTED
 
-	/*
-	 * Assert our Tcl_ChannelType struct to the true version this core
-	 * can accept, but not above the version of our design.
-	 */
-
-	IocpChannelType.version =
-		IocpGetTclMaxChannelVer(IocpChannelType.version);
-
-	switch ((int)IocpChannelType.version) {
-	    case TCL_CHANNEL_VERSION_1:
-		/* Oldest Tcl_ChannelType struct. */
-		IocpChannelType.version =
-			(Tcl_ChannelTypeVersion) IocpBlockProc;
-		break;
-	    case TCL_CHANNEL_VERSION_3:
-		/* We don't have a wideseekProc, so back down one more
-		 * to v2. */
-		IocpChannelType.version = TCL_CHANNEL_VERSION_2;
-		break;
-	    default:
-		/* No other Tcl_ChannelType struct maniputions are known at
-		 * this time. */
-		break;
-	}
-
-	os.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
-	GetVersionEx(&os);
-
-	if (InitializeIocpSubSystem() != NO_ERROR) {
+	if ((winsockLoadErr = InitializeIocpSubSystem()) != NO_ERROR) {
 	    goto unloadLibrary;
 	}
     }
@@ -237,34 +198,8 @@ InitSockets(void)
     return tsdPtr;
 
 unloadLibrary:
-    initialized = 0;
+    InterlockedExchange(&initialized, 0);
     return NULL;
-}
-
-Tcl_ChannelTypeVersion
-IocpGetTclMaxChannelVer (Tcl_ChannelTypeVersion maxAllowed)
-{
-    Tcl_ChannelType fake;
-
-    if (maxAllowed == (Tcl_ChannelTypeVersion) 0x1) {
-	return maxAllowed;
-    }
-
-    /*
-     * Stubs slot empty.  Must be TCL_CHANNEL_VERSION_1
-     */
-    if (Tcl_ChannelVersion == NULL) {
-	return TCL_CHANNEL_VERSION_1;
-    }
-    
-    /* Tcl_ChannelVersion only touches the ->version field. */
-    fake.version = maxAllowed;
-
-    while (Tcl_ChannelVersion(&fake) == TCL_CHANNEL_VERSION_1) {
-	fake.version = (Tcl_ChannelTypeVersion)((int)fake.version - 1);
-	if (fake.version == (Tcl_ChannelTypeVersion) 0x1) break;
-    }
-    return fake.version;
 }
 
 int
@@ -305,9 +240,6 @@ InitializeIocpSubSystem ()
 {
 #define IOCP_HEAP_START_SIZE	(si.dwPageSize*64)  /* about 256k */
     DWORD error = NO_ERROR;
-    SYSTEM_INFO si;
-
-    GetSystemInfo(&si);
 
     /* Create the completion port. */
     IocpSubSystem.port = CreateIoCompletionPort(
@@ -679,9 +611,10 @@ IocpRemoveAllPendingEvents (Tcl_Event *ev, ClientData cData)
 /* ==================== Tcl_Driver*Proc procedures =================== */
 
 static int
-IocpCloseProc (
+IocpClose2Proc (
     ClientData instanceData,	/* The socket to close. */
-    Tcl_Interp *interp)		/* Unused. */
+    Tcl_Interp *interp,		/* Unused. */
+    int flags)
 {
     SocketInfo *infoPtr = (SocketInfo *) instanceData;
     int errorCode = 0;
@@ -691,8 +624,11 @@ IocpCloseProc (
     all data and return an error code (if any). A non-blocking
     device should hard-close.. what to do here? */
 
+    /* we are uni-directional */
+    if (flags != 0) return 0;
+
     /*
-     * The core wants to close channels after the exit handler!
+     * The core might want to close channels after the exit handler!
      * Our heap is gone!
      */
     if (initialized) {
@@ -1504,7 +1440,6 @@ IocpGetHandleProc (
     return TCL_OK;
 }
 
-#ifdef TCL_CHANNEL_VERSION_4
 static void
 IocpThreadActionProc (ClientData instanceData, int action)
 {
@@ -1527,7 +1462,6 @@ IocpThreadActionProc (ClientData instanceData, int action)
 	LeaveCriticalSection(&infoPtr->tsdLock);
     }
 }
-#endif
 
 /* =================================================================== */
 /* ============== Lo-level buffer and state manipulation ============= */
@@ -2161,7 +2095,7 @@ IocpSetRecvMode(
 	}
 	break;
     case IOCP_RECVMODE_FLOW_CTRL:
-	recvBufSize = 0; break;
+	recvBufSize = 24; break;
     case IOCP_RECVMODE_BURST_DETECT:
 	recvBufSize = IOCP_RECV_BUFSIZE; break;
     }
