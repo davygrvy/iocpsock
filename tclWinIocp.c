@@ -25,7 +25,8 @@ struct iocpheader {
 
 /* to be shared public protos */
 extern DWORD		Tcl_WinIocpAssocHandle(HANDLE hndl, iocpheader* ocp);
-extern DWORD		Tcl_WinIocpPostToCP(HANDLE hndl, iocpheader* ocp);
+extern DWORD		Tcl_WinIocpPostToCP(iocpheader* ocp);
+
 extern __inline LPVOID	Tcl_WinIocpNPPAlloc(SIZE_T size);
 extern __inline LPVOID	Tcl_WinIocpNPPReAlloc(LPVOID block, SIZE_T size);
 extern __inline BOOL	Tcl_WinIocpNPPFree(LPVOID block);
@@ -177,34 +178,23 @@ CompletionThreadProc(LPVOID lpParam)
 	return error;
     }
 
-	/*
-	 * Use the pointer to the overlapped structure and derive from it
-	 * the top of the parent BufferInfo structure it sits in.  If the
-	 * position of the overlapped structure moves around within the
-	 * BufferInfo structure declaration, this logic does _not_ need
-	 * to be modified.
-	 */
+    /*
+     * Use the pointer to the overlapped structure and derive from it
+     * the top of the parent BufferInfo structure it sits in.  If the
+     * position of the overlapped structure moves around within the
+     * BufferInfo structure declaration, this logic does _not_ need
+     * to be modified.
+     */
 
-	bufPtr = CONTAINING_RECORD(ol, BufferInfo, ol);
+    bufPtr = CONTAINING_RECORD(ol, BufferInfo, ol);
 
-	if (!ok) {
-	    /*
-	     * If GetQueuedCompletionStatus() returned a failure on
-	     * the operation, call GetOverlappedResult() to
-	     * retreive the error code.
-	     */
+    if (!ok) {
+	opErr = GetLastError();
+    }
 
-	    ok = GetOverlappedResult(infoPtr->handle, ol,
-		    &bytes, FALSE);
-
-	    if (!ok) {
-		opErr = GetLastError();
-	    }
-	}
-
-	/* Go handle the IO operation. */
-	infoPtr->serviceProc(infoPtr, bufPtr, cport, bytes, opErr);
-	goto again;
+    /* Go handle the IO operation. */
+    infoPtr->serviceProc(infoPtr, bufPtr, cport, bytes, opErr);
+    goto again;
 }
 
 DWORD
@@ -217,7 +207,7 @@ Tcl_WinIocpAssocHandle(HANDLE hndl, iocpheader *ocp)
 DWORD
 Tcl_WinIocpPostToCP(iocpheader* ocp)
 {
-    PostQueuedCompletionStatus(cport, 0, (ULONG_PTR)ocp, );
+    return PostQueuedCompletionStatus(cport, 0, (ULONG_PTR)ocp, );
 }
 
 
@@ -306,14 +296,14 @@ Tcl_WinIocpQPushBack(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode)
 void
 Tcl_WinIocpQPushFront(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode)
 {
-    // TODO 
+    InterlockedPushEntrySList()
 }
 
 void
 Tcl_WinIocpQPopAllCompare(PSLIST_HEADER pListHead, LPVOID pItem)
 {
     // TODO: unlink the first entry, walk the list pulling out all matches for item, splice fixed list at head
-    InterlockedExchangePointer();
+    _InterlockedCompareExchange128(pListHead->Depth);
 }
 
 void
