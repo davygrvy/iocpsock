@@ -64,6 +64,8 @@ InitializeIocpSubSystem()
 {
     DWORD error = NO_ERROR;
     SYSTEM_INFO si;
+    SIZE_T HeapInitialBytes, HeapLimitBytes;
+    ULONGLONG TotalMemoryInKb, TotalMemoryBytes;
 
     /* global/once init */
     if (InterlockedExchange(&initialized, 1) == 0) {
@@ -94,21 +96,26 @@ InitializeIocpSubSystem()
 	 * clean and allocated sequentially helps prevent I/O page limit
 	 * exhaustion errors.
 	 * 
-	 * We allow the heap to grow at will, but we might consider
-	 * putting a cap on it.
+	 * We only allow the heap to grow to a limit of 1/4 the physical
+	 * RAM.  I read once this is the practical limit of the
+	 * non-paged pool.  Yes, we absolutely expect someone will push
+	 * Tcl as a server to 25,000+ open sockets.
 	 */
 
 	GetNativeSystemInfo(&si);
-	SIZE_T initialsize = si.dwPageSize * 64;  /* about 256k on x86, larger on ARM */
-	ULONGLONG TotalMemoryInKb = 0;
+
+	/* about 256k on x86, larger on ARM */
+	HeapInitialBytes = si.dwPageSize * 64;
+
 	GetPhysicallyInstalledSystemMemory(&TotalMemoryInKb);
-	// Total physical RAM in bytes
-	ULONGLONG TotalMemoryBytes = TotalMemoryInKb * 1024;
 
-	// 1/4 of total physical RAM
-	SIZE_T HeapLimitBytes = (SIZE_T)(TotalMemoryBytes / 4);
+	/* Total physical RAM in bytes */
+	TotalMemoryBytes = TotalMemoryInKb * 1024;
 
-	NPPheap = HeapCreate(0, initialsize, HeapLimitBytes);
+	/*  1/4 of total physical RAM */
+	HeapLimitBytes = (SIZE_T)(TotalMemoryBytes / 4);
+
+	NPPheap = HeapCreate(0, HeapInitialBytes, HeapLimitBytes);
 	if (NPPheap == NULL) {
 	    error = GetLastError();
 	    CloseHandle(cport);
@@ -125,10 +132,11 @@ InitializeIocpSubSystem()
 	}
 
 	/*
-	 * Do not elevate priority. You could try
-	 * THREAD_PRIORITY_BELOW_NORMAL for a more responsive Tk UI
+	 * Do not elevate priority.
+	 *
+	 * TODO: We could try THREAD_PRIORITY_BELOW_NORMAL for a more
+	 * responsive Tk UI when under heavy I/O load.
 	 */
-
 	SetThreadPriority(cpthread, THREAD_PRIORITY_NORMAL);
 	ResumeThread(cpthread);
 
