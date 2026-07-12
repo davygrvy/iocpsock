@@ -76,11 +76,39 @@ InitializeIocpSubSystem()
 	    goto error;
 	}
 
-	GetNativeSystemInfo(&si);
-#define IOCP_HEAP_START_SIZE	(si.dwPageSize*64)  /* about 256k */
+	/*
+	 * NPPheap initialization for IOCP.
+	 *
+	 * Why CreateHeap is used:
+	 * We use a dedicated private heap for overlapped buffers to
+	 * isolate them from the default process heap. This significantly
+	 * reduces heap fragmentation in high-throughput environments and
+	 * allows for safe, concurrent HeapAlloc calls across multiple
+	 * I/O worker threads.
+	 * 
+	 * Why this heap is special:
+	 * It manages the memory blocks that will be repeatedly passed to
+	 * WSARecv/WSASend.  While standard user-mode memory is pageable,
+	 * the kernel will temporarily lock these specific memory pages
+	 * into physical RAM during I/O operations. Keeping the heap
+	 * clean and allocated sequentially helps prevent I/O page limit
+	 * exhaustion errors.
+	 * 
+	 * We allow the heap to grow at will, but we might consider
+	 * putting a cap on it.
+	 */
 
-	/* Create the special private memory heap. */
-	NPPheap = HeapCreate(0, IOCP_HEAP_START_SIZE, 0);
+	GetNativeSystemInfo(&si);
+	SIZE_T initialsize = si.dwPageSize * 64;  /* about 256k on x86, larger on ARM */
+	ULONGLONG TotalMemoryInKb = 0;
+	GetPhysicallyInstalledSystemMemory(&TotalMemoryInKb);
+	// Total physical RAM in bytes
+	ULONGLONG TotalMemoryBytes = TotalMemoryInKb * 1024;
+
+	// 1/4 of total physical RAM
+	SIZE_T HeapLimitBytes = (SIZE_T)(TotalMemoryBytes / 4);
+
+	NPPheap = HeapCreate(0, initialsize, HeapLimitBytes);
 	if (NPPheap == NULL) {
 	    error = GetLastError();
 	    CloseHandle(cport);
