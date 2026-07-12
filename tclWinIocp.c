@@ -57,7 +57,9 @@ static LONG initialized = 0;
 static HANDLE cport;
 static HANDLE cpthread;
 static HANDLE NPPheap;
-//static LONG StatSpecialBytesInUse = 0;
+#if _DEBUG
+static LONG StatSpecialBytesInUse = 0;
+#endif
 
 DWORD
 InitializeIocpSubSystem()
@@ -255,7 +257,9 @@ Tcl_WinIocpNPPAlloc(SIZE_T size)
 {
     LPVOID p;
     p = HeapAlloc(NPPheap, HEAP_ZERO_MEMORY, size);
-    //if (p) InterlockedExchangeAdd(&StatSpecialBytesInUse, size);
+#if _DEBUG
+    if (p) InterlockedExchangeAdd(&StatSpecialBytesInUse, size);
+#endif
     return p;
 }
 
@@ -263,10 +267,14 @@ __inline LPVOID
 Tcl_WinIocpNPPReAlloc(LPVOID block, SIZE_T size)
 {
     LPVOID p;
+#if _DEBUG
     SIZE_T oldSize;
-    //oldSize = HeapSize(NPPheap, 0, block);
+    oldSize = HeapSize(NPPheap, 0, block);
+#endif
     p = HeapReAlloc(NPPheap, HEAP_ZERO_MEMORY, block, size);
-    //if (p) InterlockedExchangeAdd(&StatSpecialBytesInUse, ((LONG)size - oldSize));
+#if _DEBUG
+    if (p) InterlockedExchangeAdd(&StatSpecialBytesInUse, ((LONG)size - oldSize));
+#endif
     return p;
 }
 
@@ -274,10 +282,14 @@ __inline BOOL
 Tcl_WinIocpNPPFree(LPVOID block)
 {
     BOOL code;
+#if _DEBUG
     SIZE_T oldSize;
-    //oldSize = HeapSize(NPPheap, 0, block);
+    oldSize = HeapSize(NPPheap, 0, block);
+#endif
     code = HeapFree(NPPheap, 0, block);
-    //if (code) InterlockedExchangeAdd(&StatSpecialBytesInUse, -((LONG)oldSize));
+#if _DEBUG
+    if (code) InterlockedExchangeAdd(&StatSpecialBytesInUse, -((LONG)oldSize));
+#endif
     return code;
 }
 
