@@ -10,7 +10,7 @@
  *	completeion port for the internal (and external) native channel
  *	drivers, the memory allocator for the special non-paged pool,
  *	and the optimized lock-free single-producer single-consumer
- *	atomic FIFO queue routines.
+ *	ring buffer FIFO queue routines.
  *
  * ----------------------------------------------------------------------
  * RCS: @(#) $Id: $
@@ -18,6 +18,10 @@
  */
 
 #include "iocpsockInt.h"
+
+#include <stdbool.h>
+#include <stdatomic.h>
+
 
 struct iocpheader {
 
@@ -31,7 +35,6 @@ extern __inline LPVOID	Tcl_WinIocpNPPAlloc(SIZE_T size);
 extern __inline LPVOID	Tcl_WinIocpNPPReAlloc(LPVOID block, SIZE_T size);
 extern __inline BOOL	Tcl_WinIocpNPPFree(LPVOID block);
 
-/* https://learn.microsoft.com/en-us/windows/win32/Sync/interlocked-singly-linked-lists */
 extern PSLIST_HEADER	Tcl_WinIocpQCreate();
 extern void		Tcl_WinIocpQDestroy(PSLIST_HEADER pListHead);
 extern PSLIST_ENTRY	Tcl_WinIocpQNodeCreate();
@@ -162,9 +165,9 @@ DWORD WINAPI
 CompletionThreadProc(LPVOID lpParam)
 {
     TclWinIocpInfo* infoPtr;
-    TclWinIocpBufferInfo* bufPtr;
+    TclWinIocpBufferInfo* buffPtr;
     OVERLAPPED* ol;
-    DWORD bytes, opErr, error = NO_ERROR;
+    DWORD bytes, opErr;
     BOOL ok;
 
     again:
@@ -175,25 +178,22 @@ CompletionThreadProc(LPVOID lpParam)
 
     if (ok && !infoPtr) {
 	/* A NULL key indicates closure time for this thread. */
-	return error;
+	return NO_ERROR;
     }
-
-    /*
-     * Use the pointer to the overlapped structure and derive from it
-     * the top of the parent BufferInfo structure it sits in.  If the
-     * position of the overlapped structure moves around within the
-     * BufferInfo structure declaration, this logic does _not_ need
-     * to be modified.
-     */
-
-    bufPtr = CONTAINING_RECORD(ol, BufferInfo, ol);
 
     if (!ok) {
 	opErr = GetLastError();
     }
 
+    /*
+     * Use the pointer to the overlapped structure and derive from it
+     * the top of the parent BufferInfo structure it sits in.
+     */
+
+    buffPtr = CONTAINING_RECORD(ol, BufferInfo, ol);
+
     /* Go handle the IO operation. */
-    infoPtr->serviceProc(infoPtr, bufPtr, cport, bytes, opErr);
+    infoPtr->serviceProc(infoPtr, buffPtr, cport, bytes, opErr);
     goto again;
 }
 
@@ -246,6 +246,24 @@ Tcl_WinIocpNPPFree(LPVOID block)
 }
 
 /* lock-free queue */
+
+#define QUEUE_CAPACITY 24 
+#define QUEUE_MASK (QUEUE_CAPACITY - 1)
+
+// Threshold for backpressure: If our queue fills up over 75%, stop calling WSARecv
+#define RECV_HALT_THRESHOLD ((QUEUE_CAPACITY * 3) / 4) 
+
+typedef struct {
+    TclWinIocpBufferInfoPtr Ring[QUEUE_CAPACITY];
+
+    // Aligned to separate cache lines to completely prevent False Sharing
+    __declspec(align(64)) _Atomic(size_t) Head;
+    __declspec(align(64)) _Atomic(size_t) Tail;
+
+    // Tracks if our GQCS thread has paused calling WSARecv on a socket context
+    _Atomic(LONG) IsRecvPaused;
+} Network_SPSC_Pipeline;
+
 
 PSLIST_HEADER
 Tcl_WinIocpQCreate()
