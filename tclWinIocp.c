@@ -107,7 +107,11 @@ InitializeIocpSubSystem()
 	GetNativeSystemInfo(&si);
 
 	/* about 256k on x86, larger on ARM */
+#if defined(_M_ARM) || defined(_M_ARM64) || defined(__arm__) || defined(__aarch64__)
+	HeapInitialBytes = si.dwPageSize * 64;	    /* TODO */
+#else
 	HeapInitialBytes = si.dwPageSize * 64;
+#endif
 
 	GetPhysicallyInstalledSystemMemory(&TotalMemoryInKb);
 
