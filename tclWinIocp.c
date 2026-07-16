@@ -35,15 +35,14 @@ extern __inline LPVOID	Tcl_WinIocpNPPAlloc(SIZE_T size);
 extern __inline LPVOID	Tcl_WinIocpNPPReAlloc(LPVOID block, SIZE_T size);
 extern __inline BOOL	Tcl_WinIocpNPPFree(LPVOID block);
 
-extern PSLIST_HEADER	Tcl_WinIocpQCreate();
-extern void		Tcl_WinIocpQDestroy(PSLIST_HEADER pListHead);
-extern PSLIST_ENTRY	Tcl_WinIocpQNodeCreate();
-extern void		Tcl_WinIocpQNodeDestroy(PSLIST_ENTRY pListNode);
-extern LPVOID		Tcl_WinIocpQPoPFront(PSLIST_HEADER pListHead);
-extern void		Tcl_WinIocpQPushBack(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode);
-extern void		Tcl_WinIocpQPushFront(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode);
-extern void		Tcl_WinIocpQPopAllCompare(PSLIST_HEADER pListHead, LPVOID pItem);
-extern void		Tcl_WinIocpQPop(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode);
+/* forward declare */
+typedef SPSCQueue;
+
+extern void		Tcl_WinIocpQCreate(SPSCQueue* q, SIZE_T capacity);
+extern void		Tcl_WinIocpQDestroy(SPSCQueue* q);
+extern bool		Tcl_WinIocpQPoPFront(SPSCQueue* q, void** out_value);
+extern bool		Tcl_WinIocpQPushBack(SPSCQueue* q, void* item);
+//extern void		Tcl_WinIocpQPopAllCompare(PSLIST_HEADER pListHead, LPVOID pItem);
 
 /* shared private protos */
 extern DWORD InitializeIocpSubSystem();
@@ -106,7 +105,7 @@ InitializeIocpSubSystem()
 
 	GetNativeSystemInfo(&si);
 
-	/* about 256k on x86, larger on ARM */
+	/* about 256k on x86, could be larger on ARM */
 #if defined(_M_ARM) || defined(_M_ARM64) || defined(__arm__) || defined(__aarch64__)
 	HeapInitialBytes = si.dwPageSize * 64;	    /* TODO */
 #else
@@ -299,75 +298,96 @@ Tcl_WinIocpNPPFree(LPVOID block)
 
 /* lock-free queue */
 
-#define QUEUE_CAPACITY 24 
-#define QUEUE_MASK (QUEUE_CAPACITY - 1)
-
-// Threshold for backpressure: If our queue fills up over 75%, stop calling WSARecv
-#define RECV_HALT_THRESHOLD ((QUEUE_CAPACITY * 3) / 4) 
+/*
+ * Macro abstracts for Compiler Alignment & Fences
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#define ALIGN_CACHELINE __attribute__((aligned(64)))
+#define ATOMIC_FENCE_ACQUIRE() __atomic_thread_fence(__ATOMIC_ACQUIRE)
+#define ATOMIC_FENCE_RELEASE() __atomic_thread_fence(__ATOMIC_RELEASE)
+#elif defined(_MSC_VER)
+#define ALIGN_CACHELINE __declspec(align(64))
+#include <intrin.h>
+#define ATOMIC_FENCE_ACQUIRE() _ReadBarrier()
+#define ATOMIC_FENCE_RELEASE() _WriteBarrier()
+#else
+#error "Unsupported compiler. Please provide fence primitives."
+#endif
 
 typedef struct {
-    TclWinIocpBufferInfoPtr Ring[QUEUE_CAPACITY];
-
-    // Aligned to separate cache lines to completely prevent False Sharing
-    __declspec(align(64)) _Atomic(size_t) Head;
-    __declspec(align(64)) _Atomic(size_t) Tail;
-
-    // Tracks if our GQCS thread has paused calling WSARecv on a socket context
-    _Atomic(LONG) IsRecvPaused;
-} Network_SPSC_Pipeline;
+    /* Align variables to 64 bytes to eliminate cross-thread false sharing */
+    ALIGN_CACHELINE volatile ULONG_PTR head;
+    ALIGN_CACHELINE volatile ULONG_PTR tail;
+    SIZE_T mask;
+    void** buffer;
+} SPSCQueue;
 
 
-PSLIST_HEADER
-Tcl_WinIocpQCreate()
+void
+Tcl_WinIocpQCreate(SPSCQueue* q, SIZE_T capacity)
 {
-    PSLIST_HEADER pListHead;
-
-    pListHead = (PSLIST_HEADER)_aligned_malloc(sizeof(SLIST_HEADER),
-	    MEMORY_ALLOCATION_ALIGNMENT);
-    // TODO: check for error
-    InitializeSListHead(pListHead);
-    return pListHead;
+    /* Power of 2 only */
+    if ((capacity & (capacity - 1)) == 0) {
+	Tcl_Panic("Power of 2 only");
+    }
+    q->head = 0;
+    q->tail = 0;
+    q->mask = capacity - 1;
+    q->buffer = (void**)malloc(capacity * sizeof(void*));
 }
 
 void
-Tcl_WinIocpQDestroy(PSLIST_HEADER pListHead)
+Tcl_WinIocpQDestroy(SPSCQueue* q)
 {
-    _aligned_free(pListHead);
+    free(q->buffer);
 }
 
-PSLIST_ENTRY
-Tcl_WinIocpQNodeCreate()
-{
-    PSLIST_ENTRY pListNode;
 
-    pListNode = (PSLIST_ENTRY)_aligned_malloc(sizeof(SLIST_ENTRY),
-	MEMORY_ALLOCATION_ALIGNMENT);
-    return pListNode;
+bool
+Tcl_WinIocpQPoPFront(SPSCQueue* q, void** out_value) {
+    ULONG_PTR current_head = q->head;
+
+#if defined(_M_ARM) || defined(_M_ARM64) || defined(__arm__) || defined(__aarch64__)
+    MemoryBarrier();
+#endif
+    ULONG_PTR current_tail = q->tail;
+    ATOMIC_FENCE_ACQUIRE(); /* Ensure tail visibility is pulled before matching */
+
+    if (current_head == current_tail) {
+	return false; /* Queue is empty */
+    }
+
+    *out_value = q->buffer[current_head & q->mask];
+
+    /* Ensure copy-out finishes before releasing slot back to producer */
+    ATOMIC_FENCE_RELEASE();
+    q->head = current_head + 1;
+    return true;
 }
 
-void
-Tcl_WinIocpQNodeDestroy(PSLIST_ENTRY pListNode)
-{
-    _aligned_free(pListNode);
+bool
+Tcl_WinIocpQPushBack(SPSCQueue* q, void* item) {
+    ULONG_PTR current_head = q->head;
+    ATOMIC_FENCE_ACQUIRE(); /* Ensure head read finishes before tail evaluation */
+
+    ULONG_PTR current_tail = q->tail;
+
+    if ((current_tail - current_head) == (q->mask + 1)) {
+	return false; /* Queue is full */
+    }
+
+    q->buffer[current_tail & q->mask] = item;
+
+    /* Ensure data write completes before releasing index to consumer */
+    ATOMIC_FENCE_RELEASE();
+#if defined(_M_ARM) || defined(_M_ARM64) || defined(__arm__) || defined(__aarch64__)
+    MemoryBarrier(); /* Hardware barrier fallback for weak-ordered ARM targets */
+#endif
+
+    q->tail = current_tail + 1;
+    return true;
 }
 
-LPVOID
-Tcl_WinIocpQPoPFront(PSLIST_HEADER pListHead)
-{
-    return InterlockedPopEntrySList(pListHead);
-}
-
-void
-Tcl_WinIocpQPushBack(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode)
-{
-    InterlockedPushEntrySList(pListHead, pListNode);
-}
-
-void
-Tcl_WinIocpQPushFront(PSLIST_HEADER pListHead, PSLIST_ENTRY pListNode)
-{
-    InterlockedPushEntrySList()
-}
 
 void
 Tcl_WinIocpQPopAllCompare(PSLIST_HEADER pListHead, LPVOID pItem)
