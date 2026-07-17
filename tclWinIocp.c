@@ -42,7 +42,7 @@ extern void		Tcl_WinIocpQCreate(SPSCQueue* q, SIZE_T capacity);
 extern void		Tcl_WinIocpQDestroy(SPSCQueue* q);
 extern bool		Tcl_WinIocpQPoPFront(SPSCQueue* q, void** out_value);
 extern bool		Tcl_WinIocpQPushBack(SPSCQueue* q, void* item);
-//extern void		Tcl_WinIocpQPopAllCompare(PSLIST_HEADER pListHead, LPVOID pItem);
+extern void		Tcl_WinIocpQPopAllCompare(SPSCQueue* q, void* item);
 
 /* shared private protos */
 extern DWORD InitializeIocpSubSystem();
@@ -296,22 +296,22 @@ Tcl_WinIocpNPPFree(LPVOID block)
     return code;
 }
 
-/* lock-free queue */
+/* lock-free SPSC FIFO queue */
 
 /*
  * Macro abstracts for Compiler Alignment & Fences
  */
 #if defined(__GNUC__) || defined(__clang__)
-#define ALIGN_CACHELINE __attribute__((aligned(64)))
-#define ATOMIC_FENCE_ACQUIRE() __atomic_thread_fence(__ATOMIC_ACQUIRE)
-#define ATOMIC_FENCE_RELEASE() __atomic_thread_fence(__ATOMIC_RELEASE)
+#   define ALIGN_CACHELINE __attribute__((aligned(64)))
+#   define ATOMIC_FENCE_ACQUIRE() __atomic_thread_fence(__ATOMIC_ACQUIRE)
+#   define ATOMIC_FENCE_RELEASE() __atomic_thread_fence(__ATOMIC_RELEASE)
 #elif defined(_MSC_VER)
-#define ALIGN_CACHELINE __declspec(align(64))
-#include <intrin.h>
-#define ATOMIC_FENCE_ACQUIRE() _ReadBarrier()
-#define ATOMIC_FENCE_RELEASE() _WriteBarrier()
+#   define ALIGN_CACHELINE __declspec(align(64))
+#   include <intrin.h>
+#   define ATOMIC_FENCE_ACQUIRE() _ReadBarrier()
+#   define ATOMIC_FENCE_RELEASE() _WriteBarrier()
 #else
-#error "Unsupported compiler. Please provide fence primitives."
+#   error "Unsupported compiler. Please provide fence primitives."
 #endif
 
 typedef struct {
@@ -328,7 +328,7 @@ Tcl_WinIocpQCreate(SPSCQueue* q, SIZE_T capacity)
 {
     /* Power of 2 only */
     if ((capacity & (capacity - 1)) == 0) {
-	Tcl_Panic("Power of 2 only");
+	Tcl_Panic("Tcl_WinIocpQCreate(): capacity needs to be a power of 2");
     }
     q->head = 0;
     q->tail = 0;
@@ -343,28 +343,10 @@ Tcl_WinIocpQDestroy(SPSCQueue* q)
 }
 
 
-bool
-Tcl_WinIocpQPoPFront(SPSCQueue* q, void** out_value) {
-    ULONG_PTR current_head = q->head;
-
-#if defined(_M_ARM) || defined(_M_ARM64) || defined(__arm__) || defined(__aarch64__)
-    MemoryBarrier();
-#endif
-    ULONG_PTR current_tail = q->tail;
-    ATOMIC_FENCE_ACQUIRE(); /* Ensure tail visibility is pulled before matching */
-
-    if (current_head == current_tail) {
-	return false; /* Queue is empty */
-    }
-
-    *out_value = q->buffer[current_head & q->mask];
-
-    /* Ensure copy-out finishes before releasing slot back to producer */
-    ATOMIC_FENCE_RELEASE();
-    q->head = current_head + 1;
-    return true;
-}
-
+/*
+ * Push an item on to the queue (Producer thread only)
+ * Returns true on success, false if full.
+ */
 bool
 Tcl_WinIocpQPushBack(SPSCQueue* q, void* item) {
     ULONG_PTR current_head = q->head;
@@ -389,11 +371,36 @@ Tcl_WinIocpQPushBack(SPSCQueue* q, void* item) {
 }
 
 
+/*
+ * Pop an item from the queue (Consumer thread only)
+ * Returns true on success, false if empty.
+ */
+bool
+Tcl_WinIocpQPoPFront(SPSCQueue* q, void** out_value) {
+    ULONG_PTR current_head = q->head;
+
+#if defined(_M_ARM) || defined(_M_ARM64) || defined(__arm__) || defined(__aarch64__)
+    MemoryBarrier();
+#endif
+    ULONG_PTR current_tail = q->tail;
+    ATOMIC_FENCE_ACQUIRE(); /* Ensure tail visibility is pulled before matching */
+
+    if (current_head == current_tail) {
+	return false; /* Queue is empty */
+    }
+
+    *out_value = q->buffer[current_head & q->mask];
+
+    /* Ensure copy-out finishes before releasing slot back to producer */
+    ATOMIC_FENCE_RELEASE();
+    q->head = current_head + 1;
+    return true;
+}
+
 void
-Tcl_WinIocpQPopAllCompare(PSLIST_HEADER pListHead, LPVOID pItem)
+Tcl_WinIocpQPopAllCompare(SPSCQueue* q, void *pItem)
 {
     // TODO: unlink the first entry, walk the list pulling out all matches for item, splice fixed list at head
-    _InterlockedCompareExchange128(pListHead->Depth);
 }
 
 void
